@@ -24,11 +24,16 @@ func (b *backend) storageRoot(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read Apple container daemon storage: %w", err)
 	}
-	var health struct{ Status, AppRoot string }
-	if err := json.Unmarshal([]byte(result.Stdout), &health); err != nil || health.Status != "running" || !filepath.IsAbs(health.AppRoot) {
+	var health struct {
+		Status string `json:"status"`
+		Paths  struct {
+			AppRoot string `json:"appRoot"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal([]byte(result.Stdout), &health); err != nil || health.Status != "running" || !filepath.IsAbs(health.Paths.AppRoot) {
 		return "", fmt.Errorf("Apple container daemon did not report a running service with an absolute appRoot")
 	}
-	root, err := filepath.EvalSymlinks(health.AppRoot)
+	root, err := filepath.EvalSymlinks(health.Paths.AppRoot)
 	if err != nil {
 		return "", err
 	}

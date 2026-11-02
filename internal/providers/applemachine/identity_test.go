@@ -359,7 +359,7 @@ func newMachineFixture(t *testing.T, runner *recordingRunner) *machineFixture {
 		}
 		args := req.Args
 		if strings.Join(args, " ") == "system status --format json" {
-			data, _ := json.Marshal(map[string]string{"status": "running", "appRoot": f.root})
+			data, _ := json.Marshal(map[string]any{"status": "running", "paths": map[string]string{"appRoot": f.root}})
 			return core.LocalCommandResult{Stdout: string(data)}, nil, true
 		}
 		if len(args) < 3 || args[0] != "machine" {
@@ -569,7 +569,7 @@ func TestDeleteRetainsClaimWhenRemovalOrInventoryIsUncertain(t *testing.T) {
 					}
 				}
 				if removed && key == "system status --format json" && kind == "root-switch" {
-					return core.LocalCommandResult{Stdout: `{"status":"running","appRoot":"/"}`}, nil, true
+					return core.LocalCommandResult{Stdout: `{"status":"running","paths":{"appRoot":"/"}}`}, nil, true
 				}
 				if removed && key == "machine list --format json" {
 					outputs := map[string]string{"empty": "", "null": "null", "invalid": "[", "duplicate": `[{"id":"other","status":"stopped"},{"id":"other","status":"stopped"}]`, "missing-id": `[{"status":"stopped"}]`, "missing-status": `[{"id":"other"}]`, "wrong-shape": "{}"}
@@ -822,11 +822,61 @@ func TestControlRejectsPartialOrInvalidInspection(t *testing.T) {
 	}
 }
 
+func TestStorageRootAcceptsNativePaths(t *testing.T) {
+	root := t.TempDir()
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "app-root")
+	if err := os.Symlink(root, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, appRoot := range []string{root, link} {
+		data, err := json.Marshal(map[string]any{
+			"status": "running",
+			"paths":  map[string]string{"appRoot": appRoot, "installRoot": "/irrelevant"},
+			"client": map[string]string{"version": "1.6.1"},
+			"server": map[string]string{"version": "1.6.1"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner := &recordingRunner{fallback: core.LocalCommandResult{Stdout: string(data)}}
+		got, err := testBackend(runner).storageRoot(t.Context())
+		if err != nil || got != want {
+			t.Fatalf("storageRoot(%q) = %q, %v; want %q", appRoot, got, err, want)
+		}
+	}
+}
+
 func TestStorageRootRequiresDaemonEvidence(t *testing.T) {
-	for _, output := range []string{"", "null", `{}`, `{"status":"stopped","appRoot":"/"}`, `{"status":"running","appRoot":"relative"}`, `{"status":"running"}`} {
+	root := t.TempDir()
+	t.Setenv("CONTAINER_APP_ROOT", root)
+	file := filepath.Join(root, "file")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []string{
+		"", "null", `{}`, `{`,
+		`{"status":"running"}`,
+		fmt.Sprintf(`{"status":"running","appRoot":%q}`, root),
+		fmt.Sprintf(`{"status":"running","appRoot":%q,"paths":null}`, root),
+		fmt.Sprintf(`{"status":"running","appRoot":%q,"paths":{}}`, root),
+		fmt.Sprintf(`{"status":"running","appRoot":%q,"paths":{"appRoot":""}}`, root),
+		fmt.Sprintf(`{"status":"running","appRoot":%q,"paths":{"appRoot":"relative"}}`, root),
+		fmt.Sprintf(`{"status":"stopped","paths":{"appRoot":%q}}`, root),
+		fmt.Sprintf(`{"status":"running","paths":{"appRoot":%q}}`, filepath.Join(root, "missing")),
+		fmt.Sprintf(`{"status":"running","paths":{"appRoot":%q}}`, file),
+	} {
 		runner := &recordingRunner{fallback: core.LocalCommandResult{Stdout: output}}
 		if _, err := testBackend(runner).storageRoot(t.Context()); err == nil {
 			t.Fatalf("accepted %q", output)
 		}
+	}
+	cause := errors.New("daemon unavailable")
+	runner := &recordingRunner{err: cause}
+	if _, err := testBackend(runner).storageRoot(t.Context()); !errors.Is(err, cause) || !strings.Contains(err.Error(), "read Apple container daemon storage") {
+		t.Fatalf("command error lost its context or cause: %v", err)
 	}
 }
