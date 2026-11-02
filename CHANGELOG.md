@@ -4,6 +4,8 @@
 
 ### Added
 
+- Boat: select native machine sizes with `--type` or Crabbox classes for ordinary and fixed-ID leases, preserving existing default-sized lease recovery.
+
 - Hyper-V: save and resume native Windows guests with exact-claim fencing, standard lifecycle JSON receipts, a shared Node/npm warm baseline, and bounded provisioning and host operations. [PR 2975](https://github.com/openclaw/crabbox/pull/2975). Thanks @paulcam206.
 
 ### Fixed
